@@ -84,8 +84,11 @@ export async function dispatchAction(
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+// 10,000 SUSD expressed in 18-decimal wei units — used when MAX_ACTION_AMOUNT env var is absent
+const DEFAULT_MAX_ACTION_AMOUNT = BigInt("10000000000000000000000");
+
 function calculateAmount(price: number): bigint {
-  const maxAmount = BigInt(process.env.MAX_ACTION_AMOUNT ?? "10000000000000000000000");
+  const maxAmount = BigInt(process.env.MAX_ACTION_AMOUNT ?? DEFAULT_MAX_ACTION_AMOUNT.toString());
   const deviation = Math.abs(PEG_TARGET - price);
   const scale     = BigInt(Math.floor((deviation / PEG_TARGET) * 1e18));
   const amount    = (maxAmount * scale) / BigInt(1e18);

@@ -17,10 +17,14 @@ export default function DashboardPage() {
   const [chartData, setChartData] = useState<PricePoint[]>([]);
 
   useEffect(() => {
+    const CHART_DATA_POINTS = 48;           // 48 data points
+    const INTERVAL_MS       = 30 * 60 * 1000; // 30-minute intervals → 24 h window
+    const PRICE_NOISE_RANGE = 0.006;        // ±0.3 % noise around peg
+
     const now  = Date.now();
-    const mock = Array.from({ length: 48 }, (_, i) => {
-      const t     = new Date(now - (47 - i) * 30 * 60 * 1000);
-      const noise = (Math.random() - 0.5) * 0.006;
+    const mock = Array.from({ length: CHART_DATA_POINTS }, (_, i) => {
+      const t     = new Date(now - (CHART_DATA_POINTS - 1 - i) * INTERVAL_MS);
+      const noise = (Math.random() - 0.5) * PRICE_NOISE_RANGE;
       return {
         time:  `${t.getHours().toString().padStart(2, "0")}:${t.getMinutes().toString().padStart(2, "0")}`,
         price: Math.round((1.0 + noise) * 1e6) / 1e6,
