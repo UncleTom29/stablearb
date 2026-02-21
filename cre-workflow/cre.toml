@@ -1,0 +1,37 @@
+# CRE Workflow Configuration
+# StableArb peg monitor and action dispatcher
+
+[workflow]
+name = "stablearb-peg-monitor"
+version = "1.0.0"
+description = "Monitors SUSD/USD peg and dispatches defense actions via Chainlink CRE"
+
+# Cron trigger: every 5 minutes
+[trigger]
+type = "cron"
+schedule = "*/5 * * * *"
+
+[network]
+# Sepolia
+rpc_url = "${SEPOLIA_RPC_URL}"
+chain_id = 11155111
+
+[contracts]
+peg_defender = "${PEG_DEFENDER_ADDRESS}"
+susd         = "${SUSD_ADDRESS}"
+vault        = "${VAULT_ADDRESS}"
+
+[data_streams]
+endpoint      = "https://api.testnet-dataengine.chain.link"
+ws_endpoint   = "wss://ws.testnet-dataengine.chain.link"
+eth_usd_feed  = "0x000359843a543ee2fe414dc14c7e7920ef10f4372990b79d6361cdc0dd1ba782"
+
+[peg]
+target    = 1.0
+lower_band = 0.995
+upper_band = 1.005
+max_action_amount = "10000000000000000000000"  # 10,000 SUSD (18 decimals)
+
+[logging]
+level = "info"
+on_chain_reporting = true
