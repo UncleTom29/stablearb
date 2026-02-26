@@ -1,8 +1,11 @@
-# ── Foundry ─────────────────────────────────────────────────────────────────
-contracts/out/
+# ── Hardhat ──────────────────────────────────────────────────────────────────
+contracts/artifacts/
 contracts/cache/
-contracts/broadcast/
+contracts/typechain-types/
+contracts/coverage/
+contracts/coverage.json
 contracts/.env
+contracts/node_modules/
 
 # ── Node / npm ───────────────────────────────────────────────────────────────
 node_modules/
