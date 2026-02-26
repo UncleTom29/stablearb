@@ -96,13 +96,13 @@ contract StableArbVault is Ownable, ReentrancyGuard {
         address priceFeed,
         uint8   decimals_
     ) external onlyOwner {
-        if (token == address(0) || priceFeed == address(0)) revert ZeroAddress();
+        if (priceFeed == address(0)) revert ZeroAddress();
         collateralTokens[token] = CollateralToken({
             priceFeed: priceFeed,
             decimals:  decimals_,
             enabled:   true
         });
-        supportedTokens.push(token);
+        if (token != address(0)) supportedTokens.push(token);
         emit CollateralTokenAdded(token, priceFeed, decimals_);
     }
 

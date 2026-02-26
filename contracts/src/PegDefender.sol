@@ -147,13 +147,13 @@ contract PegDefender is
 
         if (useDataStreams) {
             // Trigger off-chain Data Streams fetch via StreamsLookup
-            bytes32[] memory feedIds = new bytes32[](1);
-            feedIds[0] = susdFeedId;
+            string[] memory feeds = new string[](1);
+            feeds[0] = _bytes32ToHexString(susdFeedId);
 
             // solhint-disable-next-line custom-errors
             revert StreamsLookup(
                 DATA_STREAMS_FEED_LABEL,
-                feedIds,
+                feeds,
                 "timestamp",
                 block.timestamp,
                 ""
@@ -179,7 +179,21 @@ contract PegDefender is
         uint256 price = _getFallbackPrice();
         upkeepNeeded  = (price < PEG_LOWER || price > PEG_UPPER);
         performData   = abi.encode(price, false);
-        emit FallbackUsed(price);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Chainlink Automation — checkCallback (StreamsLookupCompatible)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// @inheritdoc StreamsLookupCompatibleInterface
+    function checkCallback(
+        bytes[] memory values,
+        bytes memory /* extraData */
+    ) external pure override returns (bool upkeepNeeded, bytes memory performData) {
+        if (values.length == 0) return (false, "");
+        // Re-encode for performUpkeep: (bytes[] values, bytes extraData)
+        performData  = abi.encode(values, bytes(""));
+        upkeepNeeded = true;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -271,7 +285,7 @@ contract PegDefender is
     /// @dev Attempts to decode performData as a StreamsLookup callback (bytes[], bytes).
     function _tryDecodeStreams(bytes calldata data)
         internal
-        pure
+        view
         returns (bool success, bytes[] memory values)
     {
         try this._decodeStreams(data) returns (bytes[] memory v, bytes memory) {
@@ -293,6 +307,19 @@ contract PegDefender is
     // ─────────────────────────────────────────────────────────────────────────
     // Internal — fallback push oracle
     // ─────────────────────────────────────────────────────────────────────────
+
+    /// @dev Encodes a bytes32 feed ID as a "0x..." hex string for StreamsLookup.
+    function _bytes32ToHexString(bytes32 value) internal pure returns (string memory) {
+        bytes memory hexChars = "0123456789abcdef";
+        bytes memory result   = new bytes(66); // "0x" + 64 hex chars
+        result[0] = "0";
+        result[1] = "x";
+        for (uint256 i = 0; i < 32; i++) {
+            result[2 + i * 2]     = hexChars[uint8(value[i] >> 4)];
+            result[3 + i * 2]     = hexChars[uint8(value[i] & 0x0f)];
+        }
+        return string(result);
+    }
 
     function _getFallbackPrice() internal view returns (uint256) {
         (, int256 answer,, uint256 updatedAt,) = fallbackFeed.latestRoundData();
