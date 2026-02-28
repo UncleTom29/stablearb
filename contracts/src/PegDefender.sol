@@ -218,6 +218,7 @@ contract PegDefender is
             // Decode fallback (uint256 price, bool isFallback)
             (uint256 fallbackPrice,) = abi.decode(performData, (uint256, bool));
             susdPrice = fallbackPrice;
+            emit FallbackUsed(susdPrice);
         }
 
         _executePegDefense(susdPrice);

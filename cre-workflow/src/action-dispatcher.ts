@@ -4,7 +4,15 @@
  * Calls the PegDefender contract's performUpkeep (or a helper tx) when needed.
  */
 
-import { createPublicClient, createWalletClient, http, parseAbi, type Hex } from "viem";
+import {
+  createPublicClient,
+  createWalletClient,
+  encodeAbiParameters,
+  http,
+  parseAbi,
+  parseAbiParameters,
+  type Hex,
+} from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { sepolia } from "viem/chains";
 import { type PriceResult } from "./peg-monitor";
@@ -135,7 +143,6 @@ async function executeOnChain(
 
   // Encode performData as (uint256 price18, bool isFallback)
   const price18 = BigInt(Math.floor(price * 1e18));
-  const { encodeAbiParameters, parseAbiParameters } = await import("viem");
   const performData = encodeAbiParameters(
     parseAbiParameters("uint256 price, bool isFallback"),
     [price18, true]
