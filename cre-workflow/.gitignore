@@ -1,1 +1,4 @@
 *.env
+node_modules/
+dist/
+src/.cre_build_tmp.js

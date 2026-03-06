@@ -1,0 +1,69 @@
+name: CRE Simulation CI
+
+on:
+  push:
+    paths:
+      - "cre-workflow/**"
+      - ".github/workflows/cre-sim.yml"
+  pull_request:
+    paths:
+      - "cre-workflow/**"
+      - ".github/workflows/cre-sim.yml"
+  workflow_dispatch:
+
+jobs:
+  cre-validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cre-workflow
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: cre-workflow/package-lock.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build workflow code
+        run: npm run build
+
+      - name: Validate workflow files
+        run: |
+          test -f workflow.yaml
+          test -f project.yaml
+          test -f secrets.yaml
+          test -f src/index.ts
+
+  cre-simulate:
+    runs-on: ubuntu-latest
+    needs: cre-validate
+    if: ${{ secrets.CRE_API_KEY != '' && secrets.DATA_STREAMS_CLIENT_ID != '' && secrets.DATA_STREAMS_CLIENT_SECRET != '' && secrets.PEG_DEFENDER_ADDRESS != '' && secrets.CHAIN_ID != '' && secrets.DATA_STREAMS_FEED_ID != '' }}
+    defaults:
+      run:
+        working-directory: cre-workflow
+    env:
+      CRE_API_KEY: ${{ secrets.CRE_API_KEY }}
+      DATA_STREAMS_CLIENT_ID: ${{ secrets.DATA_STREAMS_CLIENT_ID }}
+      DATA_STREAMS_CLIENT_SECRET: ${{ secrets.DATA_STREAMS_CLIENT_SECRET }}
+      PEG_DEFENDER_ADDRESS: ${{ secrets.PEG_DEFENDER_ADDRESS }}
+      CHAIN_ID: ${{ secrets.CHAIN_ID }}
+      DATA_STREAMS_FEED_ID: ${{ secrets.DATA_STREAMS_FEED_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install CRE CLI
+        run: npm install -g @chainlink/cre-cli
+
+      - name: Authenticate CRE CLI
+        run: cre login --api-key "$CRE_API_KEY"
+
+      - name: Run CRE simulate (no broadcast)
+        run: cre workflow simulate . --target staging-settings
