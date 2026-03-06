@@ -3,117 +3,91 @@ const { ethers } = require("hardhat");
 const { time } = require("@nomicfoundation/hardhat-network-helpers");
 
 describe("PegDefender", function () {
-  let susd, defender, verifier, link, fallbackFeed;
-  let owner, treasury;
-
-  const SUSD_FEED = ethers.keccak256(ethers.toUtf8Bytes("SUSD/USD"));
-  const ETH_FEED = "0x000359843a543ee2fe414dc14c7e7920ef10f4372990b79d6361cdc0dd1ba782";
+  let susd, defender;
+  let owner, treasury, forwarder;
 
   beforeEach(async function () {
-    [owner, treasury] = await ethers.getSigners();
+    [owner, treasury, forwarder] = await ethers.getSigners();
 
     const SUSD = await ethers.getContractFactory("SUSD");
     susd = await SUSD.deploy();
 
-    const MockVerifier = await ethers.getContractFactory("MockVerifier");
-    verifier = await MockVerifier.deploy();
-
-    const MockERC20 = await ethers.getContractFactory("MockERC20");
-    link = await MockERC20.deploy();
-
-    const MockFallbackFeed = await ethers.getContractFactory("MockFallbackFeed");
-    fallbackFeed = await MockFallbackFeed.deploy(1n * 10n ** 8n); // $1.00
-
     const PegDefender = await ethers.getContractFactory("PegDefender");
     defender = await PegDefender.deploy(
-      await verifier.getAddress(),
       await susd.getAddress(),
-      await link.getAddress(),
-      await fallbackFeed.getAddress(),
       treasury.address,
-      SUSD_FEED,
-      ETH_FEED
+      forwarder.address
     );
 
     await susd.setVault(await defender.getAddress());
   });
 
-  describe("Fallback path", function () {
-    it("should not act when at peg", async function () {
-      await defender.toggleDataStreams(false);
-      const performData = ethers.AbiCoder.defaultAbiCoder().encode(
-        ["uint256", "bool"],
-        [ethers.parseEther("1"), false]
+  const encodeReport = (price, actionType, amount) => {
+    return ethers.AbiCoder.defaultAbiCoder().encode(
+      ["uint256", "string", "uint256"],
+      [price, actionType, amount]
+    );
+  };
+
+  describe("onReport", function () {
+    it("should revert if caller is not forwarder", async function () {
+      const report = encodeReport(ethers.parseEther("1"), "NONE", 0n);
+      await expect(defender.onReport("0x", report)).to.be.revertedWithCustomError(
+        defender,
+        "UnauthorizedForwarder"
       );
-      await defender.performUpkeep(performData);
+    });
+
+    it("should no-op at NONE action", async function () {
+      const performData = ethers.AbiCoder.defaultAbiCoder().encode(
+        ["uint256", "string", "uint256"],
+        [ethers.parseEther("1"), "NONE", 0n]
+      );
+      await defender.connect(forwarder).onReport("0x", performData);
       expect(await susd.totalSupply()).to.equal(0n);
     });
 
-    it("should mint when above peg", async function () {
-      await defender.toggleDataStreams(false);
-      const abovePegPrice = ethers.parseEther("1.01");
-      const performData = ethers.AbiCoder.defaultAbiCoder().encode(
-        ["uint256", "bool"],
-        [abovePegPrice, false]
-      );
-      await defender.performUpkeep(performData);
+    it("should mint to treasury on MINT action", async function () {
+      const amount = ethers.parseEther("25");
+      const report = encodeReport(ethers.parseEther("1.01"), "MINT", amount);
+
+      await defender.connect(forwarder).onReport("0x", report);
+
       expect(await susd.balanceOf(treasury.address)).to.be.gt(0n);
+      expect(await susd.balanceOf(treasury.address)).to.equal(amount);
     });
 
-    it("should burn (buyback) when below peg", async function () {
+    it("should burn treasury balance on BUYBACK action", async function () {
       // Pre-seed treasury with SUSD (temporarily set owner as vault to mint)
       await susd.setVault(owner.address);
       await susd.mint(treasury.address, ethers.parseEther("100"));
       await susd.setVault(await defender.getAddress());
 
-      await defender.toggleDataStreams(false);
-      const belowPegPrice = ethers.parseEther("0.990");
-      const performData = ethers.AbiCoder.defaultAbiCoder().encode(
-        ["uint256", "bool"],
-        [belowPegPrice, false]
-      );
-      await defender.performUpkeep(performData);
+      const burnAmount = ethers.parseEther("40");
+      const report = encodeReport(ethers.parseEther("0.99"), "BUYBACK", burnAmount);
+
+      await defender.connect(forwarder).onReport("0x", report);
+
       expect(await susd.balanceOf(treasury.address)).to.be.lt(ethers.parseEther("100"));
+      expect(await susd.balanceOf(treasury.address)).to.equal(ethers.parseEther("60"));
     });
   });
 
   describe("Cooldown", function () {
     it("should revert if cooldown has not elapsed", async function () {
-      await defender.toggleDataStreams(false);
-      const belowPegPrice = ethers.parseEther("0.990");
+      const report = encodeReport(ethers.parseEther("1.01"), "MINT", ethers.parseEther("10"));
+      await defender.connect(forwarder).onReport("0x", report);
 
-      // Pre-seed treasury with SUSD
-      await susd.setVault(owner.address);
-      await susd.mint(treasury.address, ethers.parseEther("100"));
-      await susd.setVault(await defender.getAddress());
-
-      const performData = ethers.AbiCoder.defaultAbiCoder().encode(
-        ["uint256", "bool"],
-        [belowPegPrice, false]
-      );
-      await defender.performUpkeep(performData);
-
-      await expect(defender.performUpkeep(performData))
+      await expect(defender.connect(forwarder).onReport("0x", report))
         .to.be.revertedWithCustomError(defender, "CooldownNotElapsed");
     });
 
     it("should allow action after cooldown", async function () {
-      await defender.toggleDataStreams(false);
-      const belowPegPrice = ethers.parseEther("0.990");
-
-      // Pre-seed treasury with SUSD
-      await susd.setVault(owner.address);
-      await susd.mint(treasury.address, ethers.parseEther("200"));
-      await susd.setVault(await defender.getAddress());
-
-      const performData = ethers.AbiCoder.defaultAbiCoder().encode(
-        ["uint256", "bool"],
-        [belowPegPrice, false]
-      );
-      await defender.performUpkeep(performData);
+      const report = encodeReport(ethers.parseEther("1.01"), "MINT", ethers.parseEther("5"));
+      await defender.connect(forwarder).onReport("0x", report);
 
       await time.increase(6 * 60); // 6 minutes
-      await defender.performUpkeep(performData); // should not revert
+      await defender.connect(forwarder).onReport("0x", report); // should not revert
     });
   });
 
@@ -130,8 +104,8 @@ describe("PegDefender", function () {
     });
 
     it("should set max action amount", async function () {
-      await defender.setMaxActionAmount(ethers.parseEther("500"));
-      expect(await defender.maxActionAmount()).to.equal(ethers.parseEther("500"));
+      await defender.setForwarder(owner.address);
+      expect(await defender.forwarder()).to.equal(owner.address);
     });
 
     it("should set cooldown", async function () {
