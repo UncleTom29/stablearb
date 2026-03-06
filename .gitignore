@@ -29,3 +29,8 @@ frontend/out/
 .env.*
 !.env.example
 !.env.local.example
+
+# ── Workspace scope exclusions ───────────────────────────────────────────────
+demo-video/
+cre-temp/
+temp-cre-2/
