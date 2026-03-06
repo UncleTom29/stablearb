@@ -1,41 +1,52 @@
 /**
  * index.ts — StableArb CRE Peg Monitor
  *
- * Main workflow entry-point.  Designed to be triggered every 5 minutes by the
- * CRE cron scheduler (see cre.toml).
- *
- * Flow:
- *   1. Fetch current SUSD/USD price (Data Streams → CoinGecko fallback)
- *   2. Decide and execute peg-defense action if price is outside the $0.995–$1.005 band
- *   3. Report the incident on-chain for auditability
+ * Main workflow entry-point.
  */
 
-import "dotenv/config";
-import { fetchSusdPrice }    from "./peg-monitor";
-import { dispatchAction }    from "./action-dispatcher";
-import { reportIncident }    from "./incident-reporter";
+import { CronCapability, handler, Runner, type Runtime } from "@chainlink/cre-sdk";
+import { fetchSusdPrice } from "./peg-monitor";
+import { dispatchAction } from "./action-dispatcher";
 
-async function main(): Promise<void> {
-  console.info("[stablearb-cre] Starting peg monitor run at", new Date().toISOString());
+export type Config = {
+  schedule: string;
+};
 
-  // 1. Fetch price
-  const priceResult = await fetchSusdPrice();
-  console.info(
-    `[stablearb-cre] SUSD/USD price: $${priceResult.price.toFixed(6)} ` +
-    `(source: ${priceResult.source}, confidence: ${priceResult.confidence})`
-  );
+/**
+ * Main callback function invoked by the trigger.
+ */
+export const onCronTrigger = (runtime: Runtime<Config>, _payload: any): string => {
+  runtime.log("[stablearb-cre] Starting peg monitor run");
 
-  // 2. Dispatch action
-  const decision = await dispatchAction(priceResult);
-  console.info(`[stablearb-cre] Action: ${decision.action} — ${decision.reason}`);
+  // 1. Fetch price (Sync)
+  const priceResult = fetchSusdPrice(runtime);
+  runtime.log(`[stablearb-cre] Price: ${priceResult.price}`);
 
-  // 3. Report incident
-  await reportIncident(decision);
+  // 2. Dispatch action (Sync)
+  const decision = dispatchAction(runtime, priceResult);
+  runtime.log(`[stablearb-cre] Action: ${decision.action}`);
 
-  console.info("[stablearb-cre] Run complete.");
+  return JSON.stringify(decision, (_, v) => typeof v === "bigint" ? v.toString() : v);
+};
+
+/**
+ * Initialization function for the workflow.
+ */
+export const initWorkflow = (config: Config) => {
+  const cron = new CronCapability();
+
+  return [
+    handler(
+      cron.trigger({ schedule: config.schedule }),
+      onCronTrigger
+    ),
+  ];
+};
+
+/**
+ * Entry point for simulation and production runs.
+ */
+export async function main() {
+  const runner = await Runner.newRunner<Config>();
+  await runner.run(initWorkflow);
 }
-
-main().catch((err) => {
-  console.error("[stablearb-cre] Fatal error:", err);
-  process.exit(1);
-});

@@ -1,154 +1,138 @@
 /**
  * action-dispatcher.ts
  * Decides and executes peg-defense actions based on the current SUSD/USD price.
- * Calls the PegDefender contract's performUpkeep (or a helper tx) when needed.
  */
 
-import { createPublicClient, createWalletClient, http, parseAbi, type Hex } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { sepolia } from "viem/chains";
+import { EVMClient, type Runtime, prepareReportRequest } from "@chainlink/cre-sdk";
+import { parseAbiParameters, encodeAbiParameters, type Hex, bytesToHex } from "viem";
 import { type PriceResult } from "./peg-monitor";
-
-// ── Constants ──────────────────────────────────────────────────────────────
-
-const PEG_TARGET = 1.0;
-const PEG_LOWER  = 0.995;
-const PEG_UPPER  = 1.005;
-
-// ── ABI snippets ───────────────────────────────────────────────────────────
-
-const PEG_DEFENDER_ABI = parseAbi([
-  "function performUpkeep(bytes calldata performData) external",
-  "function lastActionTimestamp() external view returns (uint256)",
-  "function cooldown() external view returns (uint256)",
-]);
-
-// ── Types ──────────────────────────────────────────────────────────────────
 
 export type ActionType = "BUYBACK" | "MINT" | "NONE";
 
 export interface ActionDecision {
-  action:    ActionType;
-  price:     number;
-  amount:    bigint;
-  reason:    string;
-  txHash?:   string;
+  action: ActionType;
+  price: number;
+  amount: bigint;
+  reason: string;
+  txHash?: string;
   timestamp: number;
 }
 
-// ── Main ───────────────────────────────────────────────────────────────────
+const DEFAULT_MAX_ACTION_AMOUNT = BigInt("10000000000000000000000");
 
 /**
- * Evaluate the peg status and dispatch a defense action if required.
+ * Main dispatcher. Off-chain logic determines if peg defense is needed.
+ * Sync-style implementation using .result()
  */
-export async function dispatchAction(
-  priceResult: PriceResult
-): Promise<ActionDecision> {
+export function dispatchAction(runtime: Runtime<any>, priceResult: PriceResult): ActionDecision {
   const { price, confidence } = priceResult;
   const timestamp = Math.floor(Date.now() / 1000);
 
-  // Skip low-confidence prices
   if (confidence === "low") {
     return {
-      action:    "NONE",
+      action: "NONE",
       price,
-      amount:    0n,
-      reason:    "Low confidence price — skipping action",
+      amount: 0n,
+      reason: "Low confidence price logs — skipping action",
       timestamp,
     };
   }
 
   let action: ActionType = "NONE";
-  let reason = "Price within peg band";
+  let reason = "Peg stable ($0.995 - $1.005)";
 
-  if (price < PEG_LOWER) {
+  if (price < 0.995) {
     action = "BUYBACK";
-    reason = `SUSD below peg ($${price.toFixed(4)}) — buying back supply`;
-  } else if (price > PEG_UPPER) {
+    reason = `SUSD below peg ($${price.toFixed(4)}) — buying back circulating supply`;
+  } else if (price > 1.005) {
     action = "MINT";
-    reason = `SUSD above peg ($${price.toFixed(4)}) — minting supply`;
+    reason = `SUSD above peg ($${price.toFixed(4)}) — minting new supply`;
   }
 
   if (action === "NONE") {
     return { action, price, amount: 0n, reason, timestamp };
   }
 
+  // Calculate dynamic buyback amount based on deviation
   const amount = calculateAmount(price);
-  console.info(`[action-dispatcher] ${reason} | Amount: ${amount}`);
+  runtime.log(`[action-dispatcher] ${reason} | Action Amount: ${amount}`);
 
-  // Execute on-chain
-  const txHash = await executeOnChain(action, price, amount);
+  // Execute on-chain via Keystone Forwarder
+  const txHash = executeOnChain(runtime, action, price, amount);
 
   return { action, price, amount, reason, txHash, timestamp };
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-// 10,000 SUSD expressed in 18-decimal wei units — used when MAX_ACTION_AMOUNT env var is absent
-const DEFAULT_MAX_ACTION_AMOUNT = BigInt("10000000000000000000000");
-
 function calculateAmount(price: number): bigint {
-  const maxAmount = BigInt(process.env.MAX_ACTION_AMOUNT ?? DEFAULT_MAX_ACTION_AMOUNT.toString());
-  const deviation = Math.abs(PEG_TARGET - price);
-  const scale     = BigInt(Math.floor((deviation / PEG_TARGET) * 1e18));
-  const amount    = (maxAmount * scale) / BigInt(1e18);
-  return amount > maxAmount ? maxAmount : amount;
+  const deviation = Math.abs(1.0 - price);
+  const scale = BigInt(Math.floor((deviation / 1.0) * 1e18));
+  const amount = (DEFAULT_MAX_ACTION_AMOUNT * scale) / BigInt(1e18);
+  return amount > DEFAULT_MAX_ACTION_AMOUNT ? DEFAULT_MAX_ACTION_AMOUNT : amount;
 }
 
-async function executeOnChain(
+/**
+ * Internal — Dispatches to evmClient.writeReport.
+ * All nodes in the DON must have agreed on this same binary report request.
+ */
+function executeOnChain(
+  runtime: Runtime<any>,
   action: ActionType,
-  price:  number,
+  price: number,
   amount: bigint
-): Promise<string | undefined> {
-  const privateKey = process.env.DEPLOYER_PRIVATE_KEY as Hex | undefined;
-  const rpcUrl     = process.env.SEPOLIA_RPC_URL;
-  const contractAddr = process.env.PEG_DEFENDER_ADDRESS as `0x${string}` | undefined;
-
-  if (!privateKey || !rpcUrl || !contractAddr) {
-    console.warn("[action-dispatcher] Missing env vars — skipping on-chain execution");
-    return undefined;
+): string | undefined {
+  let contractAddr = "";
+  try {
+    const secretObj = runtime.getSecret({ id: "PEG_DEFENDER_ADDRESS" }).result();
+    contractAddr = secretObj.value || "0x216760e96222bCe5DC454a3353364FaD8C088999";
+  } catch (e) {
+    contractAddr = "0x216760e96222bCe5DC454a3353364FaD8C088999";
   }
 
-  const account       = privateKeyToAccount(privateKey);
-  const publicClient  = createPublicClient({ chain: sepolia, transport: http(rpcUrl) });
-  const walletClient  = createWalletClient({ account, chain: sepolia, transport: http(rpcUrl) });
+  let chainId = 11155111; // Default to Sepolia
+  try {
+    const chainIdStr = runtime.getSecret({ id: "CHAIN_ID" }).result().value;
+    chainId = Number(chainIdStr || "11155111");
+  } catch (e) { }
 
-  // Check cooldown
-  const [lastAction, cooldown] = await Promise.all([
-    publicClient.readContract({
-      address: contractAddr,
-      abi:     PEG_DEFENDER_ABI,
-      functionName: "lastActionTimestamp",
-    }),
-    publicClient.readContract({
-      address: contractAddr,
-      abi:     PEG_DEFENDER_ABI,
-      functionName: "cooldown",
-    }),
-  ]);
+  const evmClient = new EVMClient(BigInt(chainId));
 
-  const now = BigInt(Math.floor(Date.now() / 1000));
-  if (now < lastAction + cooldown) {
-    console.info("[action-dispatcher] Cooldown active — skipping on-chain execution");
-    return undefined;
-  }
-
-  // Encode performData as (uint256 price18, bool isFallback)
+  // Encode payload as agreed-upon (uint256, string, uint256) tuple
   const price18 = BigInt(Math.floor(price * 1e18));
-  const { encodeAbiParameters, parseAbiParameters } = await import("viem");
   const performData = encodeAbiParameters(
-    parseAbiParameters("uint256 price, bool isFallback"),
-    [price18, true]
+    parseAbiParameters("uint256 price, string actionType, uint256 amount"),
+    [price18, action, amount]
   ) as Hex;
 
-  const hash = await walletClient.writeContract({
-    address:      contractAddr,
-    abi:          PEG_DEFENDER_ABI,
-    functionName: "performUpkeep",
-    args:         [performData],
-  });
+  // Transform Hex string to Uint8Array as required by CRE internal protocol
+  const hexStringStr = performData.slice(2);
+  const dataBytes = new Uint8Array(hexStringStr.length / 2);
+  for (let i = 0; i < dataBytes.length; i++) {
+    dataBytes[i] = parseInt(hexStringStr.slice(i * 2, i * 2 + 2), 16);
+  }
 
-  console.info("[action-dispatcher] Tx submitted:", hash);
-  await publicClient.waitForTransactionReceipt({ hash });
-  return hash;
+  try {
+    // 1. All nodes reach consensus on the binary report request.
+    const reportResponse = runtime.report(prepareReportRequest(bytesToHex(dataBytes))).result();
+
+    // 2. All nodes reaches consensus on the write dispatch with the signed report from Step 1.
+    const writeResponse = evmClient.writeReport(runtime, {
+      report: reportResponse,
+      receiver: contractAddr,
+    }).result();
+
+    // In production broadcasting, this returns the real txHash.
+    if (writeResponse.txHash) {
+      const hash = bytesToHex(writeResponse.txHash);
+      runtime.log(`[action-dispatcher] EVM Write Successful! Tx: ${hash}`);
+      return hash;
+    }
+
+    // Fallback for simulation logs
+    runtime.log("[action-dispatcher] EVM Write prepared but not broadcast (Simulation mode).");
+    return "0xSIMULATED_TRANSACTION";
+
+  } catch (err) {
+    runtime.log(`[action-dispatcher] EVM Write failed: ${(err as Error).message}`);
+    return undefined;
+  }
 }
