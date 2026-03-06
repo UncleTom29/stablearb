@@ -44,26 +44,22 @@ jobs:
   cre-simulate:
     runs-on: ubuntu-latest
     needs: cre-validate
-    if: ${{ secrets.CRE_API_KEY != '' && secrets.DATA_STREAMS_CLIENT_ID != '' && secrets.DATA_STREAMS_CLIENT_SECRET != '' && secrets.PEG_DEFENDER_ADDRESS != '' && secrets.CHAIN_ID != '' && secrets.DATA_STREAMS_FEED_ID != '' }}
     defaults:
       run:
         working-directory: cre-workflow
-    env:
-      CRE_API_KEY: ${{ secrets.CRE_API_KEY }}
-      DATA_STREAMS_CLIENT_ID: ${{ secrets.DATA_STREAMS_CLIENT_ID }}
-      DATA_STREAMS_CLIENT_SECRET: ${{ secrets.DATA_STREAMS_CLIENT_SECRET }}
-      PEG_DEFENDER_ADDRESS: ${{ secrets.PEG_DEFENDER_ADDRESS }}
-      CHAIN_ID: ${{ secrets.CHAIN_ID }}
-      DATA_STREAMS_FEED_ID: ${{ secrets.DATA_STREAMS_FEED_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install CRE CLI
-        run: npm install -g @chainlink/cre-cli
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: cre-workflow/package-lock.json
 
-      - name: Authenticate CRE CLI
-        run: cre login --api-key "$CRE_API_KEY"
+      - name: Install dependencies
+        run: npm install
 
-      - name: Run CRE simulate (no broadcast)
-        run: cre workflow simulate . --target staging-settings
+      - name: Run unit tests (peg-monitor + action-dispatcher simulation)
+        run: npm test

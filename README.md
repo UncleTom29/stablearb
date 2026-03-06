@@ -37,9 +37,9 @@ Autonomous multi-chain stablecoin infrastructure that combines:
 ```mermaid
 flowchart TD
         subgraph Offchain[Chainlink CRE / DON]
-            Cron[Cron Trigger (5m)] --> Monitor[peg-monitor.ts]
-            Monitor --> Decision[action-dispatcher.ts]
-            Decision --> Report[DON consensus + signed report]
+            Cron["Cron Trigger (5m)"] --> Monitor["peg-monitor.ts"]
+            Monitor --> Decision["action-dispatcher.ts"]
+            Decision --> Report["DON consensus + signed report"]
         end
 
         subgraph OnchainSepolia[Sepolia]
