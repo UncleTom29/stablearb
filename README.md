@@ -7,7 +7,6 @@ Autonomous multi-chain stablecoin infrastructure that combines:
 - **Off-chain peg monitoring + decentralized action dispatch** via **Chainlink CRE** (`cre-workflow`)
 - **Operator and user dashboard** (Next.js frontend)
 
-> Current repo includes smart contracts, CRE workflow, frontend, docs, and a demo-video project.
 
 ---
 
@@ -28,7 +27,9 @@ Autonomous multi-chain stablecoin infrastructure that combines:
 - [Testing](#testing)
 - [Verification & Observability](#verification--observability)
 - [Security Notes](#security-notes)
-- [Known Gotchas](#known-gotchas)
+- [Deployed Addresses](#deployed-addresses)
+- [Chainlink Usage](#chainlink-usage)
+
 
 ---
 
@@ -436,11 +437,30 @@ npm run test
 
 ---
 
-## Known Gotchas
+## Deployed Addresses
 
-- Some scripts and comments may reflect older constructor signatures; validate script args against current Solidity constructors before mainnet deploys.
-- `arbitrum-sepolia` vs `arbitrumSepolia` network name mismatch can break script commands.
-- Frontend `.next` artifacts may contain stale env values; clean build output before packaging.
-- Testnet SUSD market depth is synthetic; peg-defense actions are logic/integration validation, not economic guarantee.
+**Sepolia (Ethereum Testnet)**
+- **SUSD Token:** `0x461D7501ae9493b4678C60F97A903fc51069152A`
+- **StableArbVault:** `0x71Fb66498976B7e09fB9FC176Fb1fb53959a4A54`
+- **PegDefender:** `0x216760e96222bCe5DC454a3353364FaD8C088999`
+- **CrossChainBuyback:** `0x0a468e2506ff15a74c8D094CC09e48561969Aa12`
 
 ---
+
+## Chainlink Usage
+
+StableArb deeply integrates multiple Chainlink decentralized services to achieve its defining zero-latency peg defense mechanism:
+
+1. **Chainlink CRE:**
+   - The off-chain guardian is powered by CRE. The workflow evaluates live data, measures thresholds, forms median consensus from DON operator nodes, and performs computationally heavy margin calculations off-chain, ensuring high scalability and negligible latency before committing the defense payload on-chain.
+   - **Code:** [`cre-workflow/src`](./cre-workflow/src/) (See `peg-monitor.ts` and `action-dispatcher.ts`)
+
+2. **Chainlink Data Streams:**
+   - Instead of relying on traditional lagging on-chain push oracles, StableArb pulls high-frequency, low-latency market data for the SUSD asset natively inside the CRE workflow. This allows real-time detection of micro-deviations in the peg.
+   
+3. **Chainlink CCIP (Cross-Chain Interoperability Protocol):**
+   - In order to solve the problem of maintaining exact circulating supply synchrony across a multi-chain environment during a flash market crash, CCIP is used to securely broadcast supply adjustment instructions. When the mainnet Ethereum Sepolia contract executes a buyback or mint, a CCIP payload is simultaneously transmitted to the Arbitrum Sepolia receiver contract to identically mirror the action.
+   - **Code:** [`contracts/src/CrossChainBuyback.sol`](./contracts/src/CrossChainBuyback.sol)
+
+---
+
